@@ -2,7 +2,6 @@ import streamlit as st
 import google.generativeai as genai
 from docx import Document
 from docx.shared import Inches, Pt
-from docx.enum.text import WD_ALIGN_PARAGRAPH
 import json
 import io
 
@@ -40,6 +39,27 @@ for i, day in enumerate(days):
     with cols[i]:
         objectives[day] = st.text_area(f"{day} Objective", height=100)
 
+# --- HELPER: FIND VALID MODEL ---
+def get_valid_model():
+    """Finds the best available model to avoid 404 errors."""
+    try:
+        # Try specific stable models first
+        priority_models = ["gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-pro", "gemini-pro"]
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        
+        # Check if any priority model exists in the available list
+        for p_model in priority_models:
+             # The API usually returns names like 'models/gemini-1.5-flash', so we check if our string is in there
+            for avail in available_models:
+                if p_model in avail:
+                    return avail
+        
+        # Fallback: Just take the first available model
+        return available_models[0]
+    except Exception as e:
+        # If listing fails, default to a safe bet
+        return "gemini-1.5-flash"
+
 # --- 4. GENERATION LOGIC ---
 if st.button("Generate Lesson Plan", type="primary"):
     if not api_key:
@@ -52,18 +72,15 @@ if st.button("Generate Lesson Plan", type="primary"):
                 # Configure AI
                 genai.configure(api_key=api_key)
                 
-                # Process File
-                # Note: For simplicity in this free script, we treat PDF as text if possible, 
-                # or you can copy-paste text. Here we assume text for maximum compatibility 
-                # or use Gemini's internal file handling if setup. 
-                # To keep it 100% error-free for non-devs, we will extract text if it's simple,
-                # otherwise we pass the file to Gemini 1.5 Flash (which can read PDFs).
+                # Get Valid Model Name Dynamically
+                model_name = get_valid_model()
+                # st.info(f"Using AI Model: {model_name}") # Uncomment to see which model is being used
                 
-                # Reading the file bytes
+                # Process File
                 file_bytes = uploaded_file.getvalue()
                 
                 # Setup Model
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                model = genai.GenerativeModel(model_name)
                 
                 # Create the Prompt
                 prompt_text = f"""
@@ -97,77 +114,22 @@ if st.button("Generate Lesson Plan", type="primary"):
                 """
                 
                 # Generate content
-                # We pass the prompt + the file data (Gemini handles the PDF parsing natively)
                 response = model.generate_content([
                     {'mime_type': uploaded_file.type, 'data': file_bytes},
                     prompt_text
                 ])
                 
-                # Parse JSON
-                # Clean up json string if AI adds backticks
-                json_str = response.text.replace("```json", "").replace("```", "")
+                # Parse JSON (Handle potential markdown formatting)
+                json_str = response.text
+                if "```json" in json_str:
+                    json_str = json_str.split("```json")[1].split("```")[0]
+                elif "```" in json_str:
+                     json_str = json_str.split("```")[1]
+                
                 data = json.loads(json_str)
                 
                 # --- 5. CREATE WORD DOC ---
                 doc = Document()
                 
                 # Title
-                style = doc.styles['Normal']
-                font = style.font
-                font.name = 'Arial'
-                font.size = Pt(11)
-                
-                doc.add_heading(f'Daily Lesson Log - {subject} {grade_level}', 0)
-                doc.add_paragraph(f'Week: {quarter}')
-                doc.add_paragraph(f'Content Standard: {content_std}')
-                doc.add_paragraph(f'Performance Standard: {perf_std}')
-                
-                # Create Table
-                table = doc.add_table(rows=1, cols=6)
-                table.style = 'Table Grid'
-                
-                # Header Row
-                hdr_cells = table.rows[0].cells
-                hdr_cells[0].text = "Parts of the Lesson"
-                for i, day in enumerate(days):
-                    hdr_cells[i+1].text = day
-                
-                # Row Mapping
-                row_labels = [
-                    ("review", "Reviewing previous lesson"),
-                    ("purpose", "Establishing purpose"),
-                    ("examples", "Presenting examples"),
-                    ("discuss_1", "Discussing new concepts #1"),
-                    ("discuss_2", "Discussing new concepts #2"),
-                    ("mastery", "Developing Mastery"),
-                    ("application", "Practical application"),
-                    ("generalization", "Making generalizations"),
-                    ("evaluation", "Evaluating learning"),
-                    ("remediation", "Additional activities")
-                ]
-                
-                for key, label in row_labels:
-                    row_cells = table.add_row().cells
-                    row_cells[0].text = label
-                    if key in data:
-                        for i, day in enumerate(days):
-                            # AI might miss a day key, so use .get
-                            row_cells[i+1].text = data[key].get(day, "")
-                
-                # Save to memory buffer
-                doc_io = io.BytesIO()
-                doc.save(doc_io)
-                doc_io.seek(0)
-                
-                st.success("Lesson Plan Generated!")
-                
-                # Download Button
-                st.download_button(
-                    label="Download Word File (.docx)",
-                    data=doc_io,
-                    file_name="Lesson_Plan.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                )
-
-            except Exception as e:
-                st.error(f"An error occurred: {e}")
+                style
